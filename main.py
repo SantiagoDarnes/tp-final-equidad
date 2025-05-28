@@ -10,6 +10,8 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, precision_score, recall_score, f1_score
 import warnings
+from holisticai.bias.mitigation import Reweighing
+from holisticai.bias.metrics import classification_bias_metrics
 
 warnings.filterwarnings('ignore')
 
@@ -577,3 +579,148 @@ plt.ylabel('True Label')
 
 plt.tight_layout()
 plt.show()
+
+# Add new section for bias mitigation using Reweighing
+print("\n=== Bias Mitigation using Reweighing ===")
+
+# Import required libraries for bias mitigation
+from holisticai.bias.mitigation import Reweighing
+from holisticai.bias.metrics import classification_bias_metrics
+
+# Prepare data for bias mitigation
+# Create binary gender groups (0 for female, 1 for male)
+df['gender_binary'] = df['personal_status'].apply(
+    lambda x: 1 if 'male' in x.lower() else 0
+)
+
+# Split data into train and test sets
+X_train_mit, X_test_mit, y_train_mit, y_test_mit = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# Get gender groups for train and test
+group_a_train = df.loc[X_train_mit.index, 'gender_binary'] == 0  # Female
+group_b_train = df.loc[X_train_mit.index, 'gender_binary'] == 1  # Male
+group_a_test = df.loc[X_test_mit.index, 'gender_binary'] == 0    # Female
+group_b_test = df.loc[X_test_mit.index, 'gender_binary'] == 1    # Male
+
+# Create dictionary for train and test data
+train = {
+    'X': X_train_mit,
+    'y': y_train_mit,
+    'group_a': group_a_train,
+    'group_b': group_b_train
+}
+
+test = {
+    'X': X_test_mit,
+    'y': y_test_mit,
+    'group_a': group_a_test,
+    'group_b': group_b_test
+}
+
+# Initialize Reweighing mitigator
+mitigator = Reweighing()
+
+# Create pipeline with bias mitigation
+pipeline_mitigated = Pipeline(steps=[
+    ('preprocessor', preprocessor),
+    ('reweighing', mitigator),
+    ('classifier', RandomForestClassifier(n_estimators=100, random_state=42))
+])
+
+# Train the pipeline with bias mitigation
+print("\nTraining model with Reweighing bias mitigation...")
+pipeline_mitigated.fit(
+    train['X'], 
+    train['y'],
+    reweighing__group_a=train['group_a'],
+    reweighing__group_b=train['group_b']
+)
+
+# Make predictions
+y_pred_mitigated = pipeline_mitigated.predict(
+    test['X'],
+    reweighing__group_a=test['group_a'],
+    reweighing__group_b=test['group_b']
+)
+
+# Evaluate bias metrics for mitigated model
+print("\nEvaluating bias metrics for mitigated model...")
+metrics_mitigated = classification_bias_metrics(
+    test['group_a'],
+    test['group_b'],
+    y_pred_mitigated,
+    test['y'],
+    metric_type='both'
+)
+
+# Compute accuracy for mitigated model
+accuracy_mitigated = accuracy_score(test['y'], y_pred_mitigated)
+
+# Print results
+print("\nResults with Reweighing Bias Mitigation:")
+print(f"Accuracy: {accuracy_mitigated:.3f}")
+print("\nBias Metrics:")
+print(f"Statistical Parity: {metrics_mitigated['statistical_parity_difference']:.3f}")
+print(f"Equal Opportunity: {metrics_mitigated['equal_opportunity_difference']:.3f}")
+
+# Compare with original model
+print("\nComparison with Original Model:")
+print("Original Model:")
+print(f"Accuracy: {results['Random Forest']['accuracy']:.3f}")
+print(f"Statistical Parity Difference: {stat_parity_diff:.3f}")
+print(f"Equal Opportunity Difference: {equal_opp_diff:.3f}")
+
+print("\nMitigated Model:")
+print(f"Accuracy: {accuracy_mitigated:.3f}")
+print(f"Statistical Parity Difference: {metrics_mitigated['statistical_parity_difference']:.3f}")
+print(f"Equal Opportunity Difference: {metrics_mitigated['equal_opportunity_difference']:.3f}")
+
+# Plot comparison of fairness metrics
+plt.figure(figsize=(10, 6))
+metrics_comparison = pd.DataFrame({
+    'Metric': ['Statistical Parity', 'Equal Opportunity'] * 2,
+    'Value': [
+        stat_parity_diff,
+        equal_opp_diff,
+        metrics_mitigated['statistical_parity_difference'],
+        metrics_mitigated['equal_opportunity_difference']
+    ],
+    'Model': ['Original'] * 2 + ['Mitigated'] * 2
+})
+
+sns.barplot(data=metrics_comparison, x='Metric', y='Value', hue='Model')
+plt.title('Comparison of Fairness Metrics: Original vs Mitigated Model')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.savefig('fairness_metrics_comparison.png')
+plt.close()
+
+# Plot confusion matrices for mitigated model by gender
+plt.figure(figsize=(12, 5))
+
+plt.subplot(1, 2, 1)
+cm_male_mit = confusion_matrix(
+    y_test_mit[group_b_test],
+    y_pred_mitigated[group_b_test]
+)
+sns.heatmap(cm_male_mit, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix - Male (Mitigated)')
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+
+plt.subplot(1, 2, 2)
+cm_female_mit = confusion_matrix(
+    y_test_mit[group_a_test],
+    y_pred_mitigated[group_a_test]
+)
+sns.heatmap(cm_female_mit, annot=True, fmt='d', cmap='Blues')
+plt.title('Confusion Matrix - Female (Mitigated)')
+plt.xlabel('Predicted Label')
+plt.ylabel('True Label')
+
+plt.tight_layout()
+plt.savefig('confusion_matrix_by_gender_mitigated.png')
+plt.close()
+
